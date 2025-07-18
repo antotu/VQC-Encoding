@@ -1,0 +1,32 @@
+[
+    {
+        "train": 65.63517915309447,
+        "test": 68.18181818181819,
+        "tp_train": 48,
+        "fp_train": 61,
+        "tn_train": 339,
+        "fn_train": 166,
+        "tp_test": 19,
+        "fp_test": 10,
+        "tn_test": 90,
+        "fn_test": 35,
+        "timeTrain": 21.891658067703247,
+        "timeEvaluateTrain": 0.2972733974456787,
+        "timeEvaluateTest": 0.08112001419067383
+    },
+    {
+        "train": 66.77524429967427,
+        "test": 66.88311688311688,
+        "tp_train": 68,
+        "fp_train": 75,
+        "tn_train": 325,
+        "fn_train": 146,
+        "tp_test": 17,
+        "fp_test": 12,
+        "tn_test": 88,
+        "fn_test": 37,
+        "timeTrain": 18.287150382995605,
+        "timeEvaluateTrain": 0.2526512145996094,
+        "timeEvaluateTest": 0.07996988296508789
+    }
+]
