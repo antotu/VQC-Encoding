@@ -78,13 +78,23 @@ class VQC(nn.Module):
     def _prepare_features(self, inputs):
         x = inputs
 
+        if x.dim() == 2:
+            # batch mode: pad/slice features dimension
+            if x.shape[1] > self.numWires:
+                x = x[:, : self.numWires]
+            elif x.shape[1] < self.numWires:
+                pad = torch.zeros(x.shape[0], self.numWires - x.shape[1], dtype=x.dtype, device=x.device)
+                x = torch.cat([x, pad], dim=1)
+            return x
+
+        # single sample mode
         if x.shape[0] > self.numWires:
             x = x[: self.numWires]
         elif x.shape[0] < self.numWires:
             pad = torch.zeros(self.numWires - x.shape[0], dtype=x.dtype, device=x.device)
             x = torch.cat([x, pad], dim=0)
-
         return x
+
 
     def hamiltonian_encoding(self, inputs, layer_embed_weights):
         """
@@ -111,4 +121,10 @@ class VQC(nn.Module):
 
     def forward(self, inputs):
         """Forward pass through the hybrid model."""
+        # inputs can be [batch, features] or [features]
+        if inputs.dim() == 2:
+            # Evaluate one sample at a time
+            outputs = [self.qlayer(x) for x in inputs]   # each x is shape [features]
+            return torch.stack(outputs, dim=0)           # shape [batch, n_outputs]
         return self.qlayer(inputs)
+
