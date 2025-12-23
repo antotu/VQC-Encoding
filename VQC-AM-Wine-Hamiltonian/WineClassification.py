@@ -1,35 +1,46 @@
-import pennylane as qml
 import sys
-from sklearn.model_selection import train_test_split
-from sklearn.decomposition import PCA
+import json
+import time
+
+import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
+
+from sklearn.model_selection import train_test_split
+from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from VQC import VQC
-from model import Model
-import sys
-import json
-import pandas as pd
-import numpy as np
-from sklearn.metrics import confusion_matrix, classification_report
-import time
+from sklearn.metrics import confusion_matrix
 from sklearn.datasets import load_wine
 
-numComponents = 4
-X, y = load_wine(return_X_y=True)
+from model_hamiltonian import Model  # use the fixed Model below
+
+# -------------------------
+# CLI: WineClassification.py <numLayers> <Reuploading>
+# Example: python3 WineClassification.py 4 True
+# -------------------------
+if len(sys.argv) < 3:
+    raise ValueError("Usage: python3 WineClassification.py <numLayers> <Reuploading(True/False)>")
 
 Encoding = "Hamiltonian"
-numLayers = int(sys.argv[2])
-Hadamard = True if sys.argv[3] == "True" else False
-Reuploading = True if sys.argv[4]== "True" else False
+numLayers = int(sys.argv[1])
+Reuploading = True if sys.argv[2] == "True" else False
+
+numComponents = 4
 numWires = numComponents
 n_outputs = 3
+epochs = 30
 
-deviceGPU = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# PennyLane default.qubit is CPU-based; keep CPU unless you change the PL device backend
+deviceGPU = torch.device("cpu")
+
+# Load dataset
+X, y = load_wine(return_X_y=True)
 
 # Split the dataset
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=0
+)
 
 # Standardize and PCA
 scaler = StandardScaler()
@@ -40,22 +51,25 @@ pca = PCA(n_components=numComponents)
 X_train = pca.fit_transform(X_train, y_train)
 X_test = pca.transform(X_test)
 
-scaler = MinMaxScaler(feature_range=(0, 1))
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
+scaler2 = MinMaxScaler(feature_range=(0, 1))
+X_train = scaler2.fit_transform(X_train)
+X_test = scaler2.transform(X_test)
 
 # Convert to PyTorch tensors
-X_train = torch.tensor(X_train, dtype=torch.float32)
-y_train = torch.tensor(y_train, dtype=torch.long)  # Cambiamo a long per CrossEntropyLoss
-X_test = torch.tensor(X_test, dtype=torch.float32)
-y_test = torch.tensor(y_test, dtype=torch.long)
+X_train = torch.tensor(X_train, dtype=torch.float32, device=deviceGPU)
+y_train = torch.tensor(y_train, dtype=torch.long, device=deviceGPU)
+X_test = torch.tensor(X_test, dtype=torch.float32, device=deviceGPU)
+y_test = torch.tensor(y_test, dtype=torch.long, device=deviceGPU)
 
-epochs = 30
-model = Model(Encoding, Reuploading, Hadamard, numLayers, numWires, n_outputs).to(deviceGPU)
+model = Model(
+    Encoding=Encoding,
+    Reuploading=Reuploading,
+    numLayers=numLayers,
+    numWires=numWires,
+    n_outputs=n_outputs,
+).to(deviceGPU)
 
-# Define the optimizer
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-# Use CrossEntropyLoss for multi-class classification
 criterion = nn.CrossEntropyLoss()
 
 def evaluation(model, loader):
@@ -70,36 +84,32 @@ def evaluation(model, loader):
         for inputs, labels in loader:
             inputs, labels = inputs.to(deviceGPU), labels.to(deviceGPU)
             outputs = model(inputs)
+
             loss = criterion(outputs, labels)
             loss_value += loss.item()
 
-            _, predicted = torch.max(outputs, 1)
+            predicted = torch.argmax(outputs, dim=1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
-            all_labels.extend(labels.cpu().numpy())
-            all_predictions.extend(predicted.cpu().numpy())
+            all_labels.extend(labels.detach().cpu().numpy().tolist())
+            all_predictions.extend(predicted.detach().cpu().numpy().tolist())
 
-    return loss_value / len(loader), 100 * correct / total, all_labels, all_predictions
-
-def confusion_matrix_evaluation(y_true, y_pred):
-    cm = confusion_matrix(y_true, y_pred)
-    return cm
+    return loss_value / max(len(loader), 1), 100.0 * correct / max(total, 1), all_labels, all_predictions
 
 def train(X_train, y_train, batch_size=64):
-    train_data = TensorDataset(X_train, y_train)
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
 
     for epoch in range(epochs):
+        model.train()
         epoch_loss = 0.0
         correct = 0
         total = 0
-        model.train()
 
         for inputs, labels in train_loader:
             inputs, labels = inputs.to(deviceGPU), labels.to(deviceGPU)
-            optimizer.zero_grad()
 
+            optimizer.zero_grad()
             outputs = model(inputs)
             loss = criterion(outputs, labels)
 
@@ -107,70 +117,64 @@ def train(X_train, y_train, batch_size=64):
             optimizer.step()
 
             epoch_loss += loss.item()
-            _, predicted = torch.max(outputs, 1)
+            predicted = torch.argmax(outputs, dim=1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
-        epoch_loss /= len(train_loader)
-        accuracy = 100 * correct / total
+        epoch_loss /= max(len(train_loader), 1)
+        accuracy = 100.0 * correct / max(total, 1)
         print(f"Epoch {epoch+1}: Train Loss = {epoch_loss:.4f}, Train Accuracy = {accuracy:.2f}%")
 
-start_time_train = time.time()
-train(X_train, y_train)
-end_time_train = time.time()
-time_difference_train = end_time_train - start_time_train
-
-train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=10, shuffle=False)
-test_loader = DataLoader(TensorDataset(X_test, y_test), batch_size=10, shuffle=False)
-
-# Evaluation
-start_time_eval_train = time.time()
-lossTrain, accuracyTrain, y_true_train, y_pred_train = evaluation(model, train_loader)
-end_time_eval_train = time.time()
-time_difference_eval_train = end_time_eval_train - start_time_eval_train
-start_time_test = time.time()
-lossTest, accuracyTest, y_true_test, y_pred_test = evaluation(model, test_loader)
-end_time_eval_test = time.time()
-time_difference_eval_test = end_time_eval_test - start_time_test
-# Confusion matrix
-cm_train = confusion_matrix_evaluation(y_true_train, y_pred_train)
-cm_test = confusion_matrix_evaluation(y_true_test, y_pred_test)
-
-# Log performance and confusion matrix
-fileNameAcc = f"model_Encoding_{Encoding}_numLayers_{numLayers}_Hadamard_{Hadamard}_Reuploading_{Reuploading}_metrics.json"
-metrics = {
-    "train": {
-        "accuracy": accuracyTrain,
-        "loss": lossTrain,
-        "confusion_matrix": cm_train.tolist()  # Convert numpy array to list for JSON
-    },
-    "test": {
-        "accuracy": accuracyTest,
-        "loss": lossTest,
-        "confusion_matrix": cm_test.tolist()  # Convert numpy array to list for JSON
-    },
-    "time": {"training_time": time_difference_train,
-             "evaluation_train_time": time_difference_eval_train,
-             "evaluation_test_time": time_difference_eval_test}
-}
-
-# Save metrics and confusion matrix to JSON
 def append_dict_to_jsonl(file_name, new_dict):
     try:
-        with open(file_name, 'r') as file:
-            data = json.load(file)
+        with open(file_name, "r") as f:
+            data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         data = []
 
+    if isinstance(data, dict):
+        data = [data]
+    elif not isinstance(data, list):
+        raise TypeError("Unsupported JSON format")
+
     data.append(new_dict)
 
-    with open(file_name, 'w') as file:
-        json.dump(data, file, indent=4)
+    with open(file_name, "w") as f:
+        json.dump(data, f, indent=4)
+
+# Train
+t_train0 = time.time()
+train(X_train, y_train)
+t_train1 = time.time()
+training_time = t_train1 - t_train0
+
+# Evaluate
+train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=10, shuffle=False)
+test_loader = DataLoader(TensorDataset(X_test, y_test), batch_size=10, shuffle=False)
+
+t_eval0 = time.time()
+lossTrain, accuracyTrain, y_true_train, y_pred_train = evaluation(model, train_loader)
+t_eval1 = time.time()
+lossTest, accuracyTest, y_true_test, y_pred_test = evaluation(model, test_loader)
+t_eval2 = time.time()
+
+cm_train = confusion_matrix(y_true_train, y_pred_train)
+cm_test = confusion_matrix(y_true_test, y_pred_test)
+
+fileNameAcc = f"model_Encoding_{Encoding}_numLayers_{numLayers}_Reuploading_{Reuploading}_metrics.json"
+metrics = {
+    "train": {"accuracy": accuracyTrain, "loss": lossTrain, "confusion_matrix": cm_train.tolist()},
+    "test": {"accuracy": accuracyTest, "loss": lossTest, "confusion_matrix": cm_test.tolist()},
+    "time": {
+        "training_time": training_time,
+        "evaluation_train_time": (t_eval1 - t_eval0),
+        "evaluation_test_time": (t_eval2 - t_eval1),
+    },
+}
 
 append_dict_to_jsonl(fileNameAcc, metrics)
 
-# Print results
 print(f"Train Accuracy: {accuracyTrain:.2f}%")
 print(f"Test Accuracy: {accuracyTest:.2f}%")
-print(f"Train Confusion Matrix:\n {cm_train}")
-print(f"Test Confusion Matrix:\n {cm_test}")
+print(f"Train Confusion Matrix:\n{cm_train}")
+print(f"Test Confusion Matrix:\n{cm_test}")

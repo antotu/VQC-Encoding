@@ -44,12 +44,12 @@ class VQC(nn.Module):
         self.weight_shapes = {**self.ansatz_weight_shapes, **self.embed_weight_shapes}
 
         # Set device for PyTorch
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cpu")
         print(self.device)
 
         # Create the quantum node & TorchLayer
         self.qnode = self.create_qnode()
-        self.qlayer = qml.qnn.TorchLayer(self.qnode, self.weight_shapes).to(self.device)
+        self.qlayer = qml.qnn.TorchLayer(self.qnode, self.weight_shapes)
 
     def create_qnode(self):
         """Creates the quantum node for the hybrid model."""
