@@ -55,7 +55,8 @@ class VQC(nn.Module):
         """Creates the quantum node for the hybrid model."""
         @qml.qnode(self.dev, interface="torch")
         def qnode(inputs, weights, embed_weights):
-            qml.Hadamard(wires=range(self.numWires))
+            for i in range(self.numWires):
+                qml.Hadamard(wires=i)
             # Encoding + ansatz logic
             if self.Reuploading:
                 # Interleave embedding and ansatz per layer
